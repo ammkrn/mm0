@@ -13,40 +13,40 @@ macro_rules! html_tag {
   ( $({ $tyname:ident, $id:ident, $($n:ident : $t:ty),* })* ) => {
 
     #[derive(Debug, Clone)]
-    /// Enum for Doc annotations that become HTML tags. All variants have a list
-    /// of classes which are (as a string) the first argument to their constructor.
+    /// Enum for Doc annotations that become HTML tags. All variants have a 
+    /// class which is a static str as the first argument to their constructor.
     pub enum HtmlTag {
       $(
         #[allow(missing_docs)]
         $tyname { 
           #[allow(missing_docs)]
-          classes: String, 
+          class: &'static str, 
           $(#[allow(missing_docs)] $n: $t),* }
       ),*
     }
   
     impl HtmlTag {
       /// Makes a constructor for each html tag. example:
-      /// fn a(classes: String, href: String) -> Self {
-      ///   Self::A { classes, href }
+      /// fn a(class: &'static str, href: String) -> Self {
+      ///   Self::A { class, href }
       ///}
       $(
         #[allow(missing_docs)]
-        pub fn $id(classes: String, $($n: $t),*) -> Self {
+        pub fn $id(class: &'static str, $($n: $t),*) -> Self {
           Self::$tyname {
-            classes,
+            class,
             $($n),*
           }
         }
       )*
   
-      /// Makes an open tag for each enum variant. Example for HtmlTag::A { classes, href }:
-      /// <a classes="contents_of_class_field" href="content_of_href_field">
+      /// Makes an open tag for each enum variant. Example for HtmlTag::A { class, href }:
+      /// <a class="contents_of_class_field" href="content_of_href_field">
       pub fn open(&self) -> String {
         match self {
           $(
-            Self::$tyname { classes, $($n),* } => {
-              let mut s = if classes.is_empty() {
+            Self::$tyname { class, $($n),* } => {
+              let mut s = if class.is_empty() {
                 format!(
                   "<{}",
                   stringify!($id),
@@ -55,7 +55,7 @@ macro_rules! html_tag {
                 format!(
                   "<{} class=\"{}\"",
                   stringify!($id),
-                  classes,
+                  class,
                 )
               };
               $(
@@ -71,7 +71,7 @@ macro_rules! html_tag {
         }
       }
           
-      /// Makes a close tag for each enum variant. Example for HtmlTag::A { classes, href }:
+      /// Makes a close tag for each enum variant. Example for HtmlTag::A { class, href }:
       /// </a>
       pub fn close(&self) -> &'static str {
         match self {
@@ -86,11 +86,11 @@ macro_rules! html_tag {
     
 // Make the desired HTML tags as variants of an enum.
 // As an example, the a/anchor tag gets the following enum variant, a constructor
-// invoked as `HtmlTag::a(classes: String, href: String)`, and functions producing
+// invoked as `HtmlTag::a(class: String, href: String)`, and functions producing
 // the open/close tags.
 // ```
 // HtmlTag::A {
-//   classes: String,
+//   class: String,
 //   href: String
 // }
 // ```
@@ -134,7 +134,7 @@ impl IsAnnotation for HtmlTag {
   /// Example: `<pre class="sortname">wff</pre>`
   fn ann_sort_name<'a>(p: &'a Pretty<'a, Self>, name: &ArcString) -> RefDoc<'a, Self> {
     p.alloc(Doc::Annotated(
-      HtmlTag::Pre { classes: "sortname".to_string() }, 
+      HtmlTag::pre("sortname"), 
       p.alloc(Doc::text(name.to_string()))
     ))
   }
@@ -142,7 +142,7 @@ impl IsAnnotation for HtmlTag {
   /// Example: `<pre class="sortmod">pure strict</pre>`
   fn ann_sort_mods<'a>(p: &'a Pretty<'a, Self>, mods: &Modifiers) -> RefDoc<'a, Self> {
     p.alloc(Doc::Annotated(
-      HtmlTag::Pre { classes: "sortmod".to_string() },
+      HtmlTag::pre("sortmod"),
       p.alloc(Doc::text(mods.to_string()))
     ))
   }
@@ -204,7 +204,7 @@ impl<'a, W: Write> pretty::RenderAnnotated<'a, HtmlTag> for AnnotPrinter<W> {
     if let Some(x) = self.stack.pop() {
       self.writer.write_str(x)
     } else {
-      Ok(())
+      panic!("stack underflow in AnnotPrinter::pop_annotation")
     }
   }
 }
@@ -229,7 +229,7 @@ mod annot_tests {
     // if you're going to do something that needs to surround, like html tags.
     fe.pretty_annotated(|p| {
       let doc = <HtmlTag as IsAnnotation>::ann_sort_name(p, &sortname);
-      p.alloc(Doc::Annotated(HtmlTag::div(String::new()), doc))
+      p.alloc(Doc::Annotated(HtmlTag::div(""), doc))
       .render_raw(80, &mut ap)
       .expect("Bad write");
     });
@@ -250,7 +250,7 @@ mod annot_tests {
     fe.pretty_annotated(|p| {
       let mut doc = p.alloc(Doc::text("linked_item"));
       doc = p.alloc(Doc::Annotated(
-        HtmlTag::a(format!("some_class"), format!("place.html")),
+        HtmlTag::a("some_class", format!("place.html")),
         doc
       ));
       doc.render_raw(80, &mut ap).expect("Bad write");
