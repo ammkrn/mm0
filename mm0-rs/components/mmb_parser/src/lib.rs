@@ -52,8 +52,8 @@
   clippy::use_self
 )]
 
-mod parser;
-mod ty;
+pub mod parser;
+pub mod ty;
 mod write;
 
 use std::convert::{TryFrom, TryInto};

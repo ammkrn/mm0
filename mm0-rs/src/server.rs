@@ -477,6 +477,17 @@ impl Vfs {
   }
 }
 
+/// Struct containing the information passed from the vscode extension to the server
+/// when the extension wants mmb debugger information. 
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize)]
+pub struct MmbDebugParams {
+    use_var_names: bool,
+    stepnum: usize,
+    file_uri: Url,
+    decl_ident: String,
+    parse_only: bool,
+}
+
 #[derive(Debug)]
 enum RequestType {
   Completion(CompletionParams),
@@ -486,6 +497,7 @@ enum RequestType {
   DocumentSymbol(DocumentSymbolParams),
   References(ReferenceParams),
   DocumentHighlight(DocumentHighlightParams),
+  MmbDebugInfo(MmbDebugParams)
 }
 
 fn parse_request(Request {id, method, params}: Request) -> Result<Option<(RequestId, RequestType)>> {
@@ -497,6 +509,7 @@ fn parse_request(Request {id, method, params}: Request) -> Result<Option<(Reques
     "textDocument/documentSymbol"    => Some((id, RequestType::DocumentSymbol(from_value(params)?))),
     "textDocument/references"        => Some((id, RequestType::References(from_value(params)?))),
     "textDocument/documentHighlight" => Some((id, RequestType::DocumentHighlight(from_value(params)?))),
+    "mmbDebugger/InfoByName"         => Some((id, RequestType::MmbDebugInfo(from_value(params)?))),
     _ => None
   })
 }
@@ -583,6 +596,11 @@ impl RequestHandler {
         let file: FileRef = doc.text_document.uri.into();
         self.finish(references(file.clone(), doc.position, true,
           |range| DocumentHighlight { range, kind: None }).await)
+      }
+      RequestType::MmbDebugInfo(params) => {
+        let fileref: FileRef = params.file_uri.clone().into();
+        let r : StdResult<serde_json::Value, ResponseError> = decl_by_name(fileref, params).await;
+        self.finish(r)
       }
     }
   }
@@ -794,6 +812,40 @@ async fn hover(path: FileRef, pos: Position) -> StdResult<Option<Hover>, Respons
     range: Some(text.to_range(out[0].0)),
     contents: HoverContents::Array(out.into_iter().map(|s| s.1).collect())
   }))
+}
+
+// Eventually this can get the variable names from the MMB index.
+async fn decl_by_name(
+  // This is either the mm0 file or the mm1 file path. 
+  path: FileRef, 
+  params: MmbDebugParams
+) -> StdResult<serde_json::Value, ResponseError> {
+  // Swap to the mmb file by changing the file extension, but using
+  // the same base path as the mm0/mm1 file
+  let mut mmb_path = path.path().clone();
+  assert!(mmb_path.set_extension("mmb"));
+  let mmb_path = FileRef::from(mmb_path);
+
+  let (_mmb_fileref, mmb_vf) = SERVER
+    .vfs
+    .get_or_insert(mmb_path)
+    .map_err(|_| response_err(ErrorCode::InvalidRequest, format!("server::decl_by_name nonexistent mmb file: {}", path)))?;
+
+  let mmb_bytes = &**(&mmb_vf.text.ulock().1);
+  let mmb_file = mmb_parser::MmbFile::parse(mmb_bytes).map_err(|e| response_err(ErrorCode::UnknownErrorCode, format!("mmb parse error: {:?}", e)))?;
+  let mmb_index = mmb_file.index.as_ref().ok_or_else(|| response_err(ErrorCode::InvalidRequest, "server::declar_by_name no index"))?;
+  let mut declar_iter = mmb_file.proof();
+  while let Some(Ok((stmt, proof))) = declar_iter.next() {
+    if let Some(decl_ident) = mmb_index.stmt(stmt).and_then(|index_ref| index_ref.value()) {
+      if params.decl_ident == decl_ident {
+        let response = mmb_debugger::verify1_extern(&mmb_file, stmt, proof, Some(params.stepnum))
+        .map_err(|e| response_err(ErrorCode::UnknownErrorCode, format!("verify1_extern error: {:?}", e)))?;
+        return Ok(response)
+      }
+    }
+  }
+
+  Err(response_err(ErrorCode::InvalidRequest, format!("Unable to find declaration with the requested name: {}", params.decl_ident)))
 }
 
 async fn definition<T>(path: FileRef, pos: Position,

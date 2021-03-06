@@ -54,6 +54,7 @@ deepsize_0 = { path = "components/deepsize_0", optional = true }
 mm0_util = { path = "components/mm0_util", default-features = false, features = ["debug"] }
 mmb_parser = { path = "components/mmb_parser" }
 mm1_parser = { path = "components/mm1_parser" }
+mmb_debugger = { path = "components/mmb_debugger" }
 
 # For "server" feature
 log = { version = "0.4.14", optional = true }

@@ -72,7 +72,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{borrow::Borrow, convert::TryInto};
 
-mod ids;
+pub mod ids;
 mod atoms;
 mod lined_string;
 

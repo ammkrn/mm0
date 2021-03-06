@@ -1,0 +1,20 @@
+[package]
+name = "mmb_debugger"
+version = "0.1.0"
+authors = ["ammkrn <ammkrn@tuta.io>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[profile.release]
+opt-level=3
+overflow-checks = true
+#lto=true
+
+[dependencies]
+bumpalo = { version = "3.5.0", features = ["collections"] }
+mmb_parser = { path = "../mmb_parser" }
+mm0_util = { path = "../mm0_util", features = ["server"] }
+mm1_parser = { path = "../mm1_parser" }
+serde_json = { version = "1.0.63" }
+

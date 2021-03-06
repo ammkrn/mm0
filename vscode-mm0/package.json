@@ -4,7 +4,7 @@
 	"description": "Language support for Metamath Zero",
 	"author": "Mario Carneiro",
 	"publisher": "digama0",
-	"version": "1.0.3",
+	"version": "1.1.0",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/digama0/mm0"
@@ -109,6 +109,12 @@
 				"category": "MM0",
 				"title": "Shutdown",
 				"description": "Shut down the Language Server."
+			},
+			{
+				"command": "metamath-zero.debugByIdent",
+				"category": "MM0",
+				"title": "start mmb debugger",
+				"description": "start an mmb proof debugging session for a given name/ident."
 			}
 		]
 	},
