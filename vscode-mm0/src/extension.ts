@@ -1,68 +1,48 @@
-import { commands, window, workspace, ExtensionContext, TextDocument, EndOfLine } from 'vscode';
+import * as vc from 'vscode';
+import { debuggerWebview } from './debugger/infoview';
+import { Mm0Client } from './mm0_client';
 
-import {
-	LanguageClient,
-	LanguageClientOptions,
-	ServerOptions,
-	ErrorAction,
-	CloseAction
-} from 'vscode-languageclient';
+export const mm0Client: Mm0Client = new Mm0Client()
 
-let client: LanguageClient;
+export function activate(context: vc.ExtensionContext) {
 
-function startClient() {
-	let config = workspace.getConfiguration('metamath-zero');
-	let mm0Path: string = config.get('executablePath') || 'mm0-rs';
-
-	// If the extension is launched in debug mode then the debug server options are used
-	// Otherwise the run options are used
-	let serverOptions: ServerOptions = {
-		run: { command: mm0Path, args: ['server'] },
-		debug: { command: mm0Path, args: ['server', '--debug'] }
-	};
-
-	// Options to control the language client
-	let clientOptions: LanguageClientOptions = {
-		// Register the server for MM0 files
-		documentSelector: [{ scheme: 'file', language: 'metamath-zero' }],
-		initializationOptions: { extraCapabilities: { goalView: true } }
-	};
-
-	// Create the language client and start the client.
-	client = new LanguageClient(
-		'metamath-zero', 'Metamath Zero Server', serverOptions, clientOptions);
-
-	// Start the client. This will also launch the server
-	client.start();
-}
-
-export function activate(context: ExtensionContext) {
-	startClient();
 
 	// Unfortunately it is not possible to set the default line endings to LF,
 	// which is required for MM0 files. Instead we just try to set it to LF
 	// on open and save.
-	function makeLF(doc: TextDocument) {
+	function makeLF(doc: vc.TextDocument) {
 		if (doc.languageId === 'metamath-zero' &&
-				doc.eol !== EndOfLine.LF &&
-				window.activeTextEditor) {
-			window.activeTextEditor.edit(
-				builder => builder.setEndOfLine(EndOfLine.LF))
+				doc.eol !== vc.EndOfLine.LF &&
+				vc.window.activeTextEditor) {
+			vc.window.activeTextEditor.edit(
+				builder => builder.setEndOfLine(vc.EndOfLine.LF))
 		}
 	}
 	context.subscriptions.push(
-		workspace.onDidOpenTextDocument(makeLF),
-		workspace.onWillSaveTextDocument(e => makeLF(e.document)),
-		commands.registerCommand('metamath-zero.shutdownServer',
-		  () => client.stop().then(() => {}, () => {})),
-		commands.registerCommand('metamath-zero.restartServer',
-			() => client.stop().then(startClient, startClient))
+		vc.workspace.onDidOpenTextDocument(makeLF),
+		vc.workspace.onWillSaveTextDocument(e => makeLF(e.document)),
+		vc.commands.registerCommand('metamath-zero.restartServer', () => mm0Client.restart()),
+		vc.commands.registerCommand('metamath-zero.shutdownServer', () => mm0Client.stop().then(() => {}, () => {})),
+		vc.commands.registerCommand('metamath-zero.debugByIdent', async () => {
+			if (mm0Client.client === undefined) {
+				throw new Error("No valid client")
+			}
+            // The "last" catch/throw is in debuggerWebview; at this point apparently we lose
+            // the ability to properly display the error to users.
+			await debuggerWebview(context, mm0Client.client);
+		})
 	);
+
+	mm0Client.start();
 }
 
 export function deactivate(): Thenable<void> | undefined {
-	if (!client) {
+	if (!mm0Client) {
 		return undefined;
 	}
-	return client.stop();
+	return mm0Client.stop();
 }
+
+
+
+

@@ -12,6 +12,7 @@ use zerocopy::{FromBytes, Unaligned, U16, U32, U64};
 pub mod parser;
 pub mod import;
 pub mod export;
+pub mod debugger;
 
 /// Constants used in the MMB specification.
 pub mod cmd {

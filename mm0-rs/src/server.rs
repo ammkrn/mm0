@@ -32,6 +32,7 @@ use crate::elab::{ElabResult, ElaborateBuilder, GoalListener,
   local_context::InferSort, proof::Subst,
   lisp::{print::FormatEnv, pretty::Pretty, LispKind, Proc, BuiltinProc},
   spans::Spans};
+use crate::mmb::debugger::MmbDebugParams;
 
 // Disabled because vscode doesn't handle them properly
 const USE_LOCATION_LINKS: bool = false;
@@ -486,6 +487,7 @@ enum RequestType {
   DocumentSymbol(DocumentSymbolParams),
   References(ReferenceParams),
   DocumentHighlight(DocumentHighlightParams),
+  MmbDebugInfo(MmbDebugParams)
 }
 
 fn parse_request(Request {id, method, params}: Request) -> Result<Option<(RequestId, RequestType)>> {
@@ -497,6 +499,7 @@ fn parse_request(Request {id, method, params}: Request) -> Result<Option<(Reques
     "textDocument/documentSymbol"    => Some((id, RequestType::DocumentSymbol(from_value(params)?))),
     "textDocument/references"        => Some((id, RequestType::References(from_value(params)?))),
     "textDocument/documentHighlight" => Some((id, RequestType::DocumentHighlight(from_value(params)?))),
+    "$/mmbDebugger/InfoByName"       => Some((id, RequestType::MmbDebugInfo(from_value(params)?))),
     _ => None
   })
 }
@@ -583,6 +586,12 @@ impl RequestHandler {
         let file: FileRef = doc.text_document.uri.into();
         self.finish(references(file.clone(), doc.position, true,
           |range| DocumentHighlight { range, kind: None }).await)
+      }
+      RequestType::MmbDebugInfo(params) => {
+        let url = Url::parse(params.file_uri.as_str()).map_err(|e| ServerError::from(format!("URL parse error: {:?}", e)))?;
+        let fileref: FileRef = url.into();
+        let r : StdResult<serde_json::Value, ResponseError> = decl_by_name(fileref, params).await;
+        self.finish(r)
       }
     }
   }
@@ -794,6 +803,42 @@ async fn hover(path: FileRef, pos: Position) -> StdResult<Option<Hover>, Respons
     range: Some(text.to_range(out[0].0)),
     contents: HoverContents::Array(out.into_iter().map(|s| s.1).collect())
   }))
+}
+
+// Eventually this can get the variable names from the MMB index.
+async fn decl_by_name(
+  mm1_path: FileRef, 
+  params: MmbDebugParams
+) -> StdResult<serde_json::Value, ResponseError> {
+
+  let env = elaborate(mm1_path.clone(), Some(Position::default()), Default::default(), Default::default())
+    .await.map_err(|e| response_err(ErrorCode::InternalError, format!("{:?}", e)))?;
+  let (_, env) = env.into_response_error()?.ok_or_else(|| response_err(ErrorCode::InternalError, format!("Unable to make env")))?;
+  let env = unsafe { env.thaw() };  
+
+  let mut mmb_path = mm1_path.path().clone();
+  assert!(mmb_path.set_extension("mmb"));
+  let mmb_path = FileRef::from(mmb_path);
+
+  let (_mmb_fileref, mmb_vf) = SERVER
+    .vfs
+    .get_or_insert(mmb_path.clone())
+    .map_err(|_| response_err(ErrorCode::InvalidRequest, format!("server::decl_by_name nonexistent mmb file: {}", mmb_path)))?;
+
+  let mmb_bytes = &**(&mmb_vf.text.ulock().1);
+  let mmb_file = mmb_parser::BasicMmbFile::parse(mmb_bytes).map_err(|e| response_err(ErrorCode::UnknownErrorCode, format!("mmb parse error: {:?}", e)))?;
+  let mut decl_iter = mmb_file.proof();
+  while let Some(Ok((stmt, proof))) = decl_iter.next() {
+    if let Some(decl_ident) = mmb_file.stmt_index(stmt).and_then(|index_ref| index_ref.value()) {
+      if params.decl_ident == decl_ident {
+        let response = crate::mmb::debugger::verify1_extern(&mmb_file, env, stmt, proof, params)
+            .map_err(|e| response_err(ErrorCode::UnknownErrorCode, format!("verify1_extern error: {:?}", e)))?;
+        return Ok(response)
+      }
+    }
+  }
+
+  Err(response_err(ErrorCode::InvalidRequest, format!("Unable to find declaration with the requested name: {}", params.decl_ident)))
 }
 
 async fn definition<T>(path: FileRef, pos: Position,
@@ -1205,52 +1250,52 @@ struct ClientCapabilities {
 }
 
 impl ClientCapabilities {
-  fn new(params: InitializeParams) -> ClientCapabilities {
-    let dll = match params.capabilities.text_document.as_ref()
-      .and_then(|d| d.definition.as_ref()) {
-      Some(&GotoCapability {link_support: Some(b), ..}) => Some(b),
-      Some(GotoCapability {dynamic_registration: Some(true), ..}) => Some(true),
-      _ => Some(false)
-    };
-    let goal_view = params.initialization_options
-      .and_then(|o| from_value(o).ok()).and_then(|o: InitOptions| o.extra_capabilities)
-      .and_then(|c| c.goal_view).unwrap_or(false);
-    ClientCapabilities { reg_id: None, definition_location_links: dll, goal_view }
-  }
-
-  fn register(&mut self) -> Result<()> {
-    assert!(self.reg_id.is_none());
-    let mut regs = vec![];
-    if USE_LOCATION_LINKS && self.definition_location_links.is_none() {
+    fn new(params: InitializeParams) -> ClientCapabilities {
+      let dll = match params.capabilities.text_document.as_ref()
+        .and_then(|d| d.definition.as_ref()) {
+        Some(&GotoCapability {link_support: Some(b), ..}) => Some(b),
+        Some(GotoCapability {dynamic_registration: Some(true), ..}) => Some(true),
+        _ => Some(false)
+      };
+      let goal_view = params.initialization_options
+        .and_then(|o| from_value(o).ok()).and_then(|o: InitOptions| o.extra_capabilities)
+        .and_then(|c| c.goal_view).unwrap_or(false);
+      ClientCapabilities { reg_id: None, definition_location_links: dll, goal_view }
+    }
+  
+    fn register(&mut self) -> Result<()> {
+      assert!(self.reg_id.is_none());
+      let mut regs = vec![];
+      if USE_LOCATION_LINKS && self.definition_location_links.is_none() {
+        regs.push(Registration {
+          id: String::new(),
+          method: "textDocument/definition".into(),
+          register_options: None
+        })
+      }
+  
       regs.push(Registration {
         id: String::new(),
-        method: "textDocument/definition".into(),
-        register_options: None
-      })
+        method: "workspace/didChangeConfiguration".into(),
+        register_options: None,
+      });
+  
+      if !regs.is_empty() {
+        register_capability("regs".into(), regs)?;
+        self.reg_id = Some(String::from("regs").into());
+      }
+      Ok(())
     }
-
-    regs.push(Registration {
-      id: String::new(),
-      method: "workspace/didChangeConfiguration".into(),
-      register_options: None,
-    });
-
-    if !regs.is_empty() {
-      register_capability("regs".into(), regs)?;
-      self.reg_id = Some(String::from("regs").into());
-    }
-    Ok(())
-  }
-
-  fn finish_register(&mut self, resp: &Response) {
-    assert!(self.reg_id.take().is_some());
-    match resp {
-      Response {result: None, error: None, ..} =>
-        self.definition_location_links = Some(true),
-      _ => self.definition_location_links = Some(false)
+  
+    fn finish_register(&mut self, resp: &Response) {
+      assert!(self.reg_id.take().is_some());
+      match resp {
+        Response {result: None, error: None, ..} =>
+          self.definition_location_links = Some(true),
+        _ => self.definition_location_links = Some(false)
+      }
     }
   }
-}
 
 enum DepChangeReason { Open, Close, Elab }
 
@@ -1461,6 +1506,7 @@ impl Server {
     loop {
       match (|| -> Result<bool> {
         let Server {conn, caps, reqs, vfs, options, ..} = &*SERVER;
+
         match conn.receiver.recv() {
           Err(RecvError) => return Ok(true),
           Ok(Message::Request(req)) => {
